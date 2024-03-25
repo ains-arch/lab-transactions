@@ -73,22 +73,44 @@ class Ledger:
         It also updates the "balances" table to apply the debits and credits to the appropriate accounts.
         Notice that in order to do an UPDATE command to apply the credits/debits, we first need to run a SELECT command to get the current balance.
         '''
+        try:
+            with self.connection.begin():
 
-        # insert the transaction
-        sql = f'INSERT INTO transactions (debit_account_id, credit_account_id, amount) VALUES ({debit_account_id}, {credit_account_id}, {amount})'
-        logging.debug(sql)
-        self.connection.execute(sql)
+                # # lock
+                # lock_sql = 'LOCK TABLE balances IN ACCESS EXCLUSIVE MODE'
+                # logging.debug(lock_sql)
+                # self.connection.execute(lock_sql)
 
-        # update the debit account balance
-        sql = f'SELECT balance FROM balances WHERE account_id = {debit_account_id}'
-        logging.debug(sql)
-        results = self.connection.execute(sql)
-        debit_account_balance = results.first()['balance']
+                # insert the transaction
+                sql = f'INSERT INTO transactions (debit_account_id, credit_account_id, amount) VALUES ({debit_account_id}, {credit_account_id}, {amount})'
+                logging.debug(sql)
+                self.connection.execute(sql)
 
-        debit_new_balance = debit_account_balance - amount
-        sql = f'UPDATE balances SET balance={debit_new_balance} WHERE account_id = {debit_account_id}'
-        logging.debug(sql)
-        self.connection.execute(sql)
+                # update the debit account balance
+                sql = f'SELECT balance FROM balances WHERE account_id = {debit_account_id} FOR UPDATE'
+                logging.debug(sql)
+                results = self.connection.execute(sql)
+                debit_account_balance = results.first()['balance']
 
-        # FIXME:
-        # you need to update the credit account balance as well
+                debit_new_balance = debit_account_balance - amount
+                sql = f'UPDATE balances SET balance={debit_new_balance} WHERE account_id = {debit_account_id}'
+                logging.debug(sql)
+                self.connection.execute(sql)
+
+                sql = f'SELECT balance FROM balances WHERE account_id = {credit_account_id} FOR UPDATE'
+                logging.debug(sql)
+                results = self.connection.execute(sql)
+                credit_account_balance = results.first()['balance']
+
+                credit_new_balance = credit_account_balance + amount
+                sql = f'UPDATE balances SET balance={credit_new_balance} WHERE account_id = {credit_account_id}'
+                logging.debug(sql)
+                self.connection.execute(sql)
+        except sqlalchemy.exc.OperationalError as e:
+            # Check if the error is due to a deadlock
+            if "deadlock" in str(e).lower():
+                # Retry the transfer_funds function call
+                self.transfer_funds(debit_account_id, credit_account_id, amount)
+            else:
+                # If it's not a deadlock error, raise the error
+                raise
